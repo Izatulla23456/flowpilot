@@ -32,6 +32,7 @@ interface State {
   serverOnline: boolean;
   historyTick: number;
   rfInstance: ReactFlowInstance | null;
+  addRfNodeFn: ((rfNode: any) => void) | null;
 
   setWorkflows: (w: Workflow[]) => void;
   setCurrent: (w: Workflow | null) => void;
@@ -46,6 +47,7 @@ interface State {
   setServerOnline: (v: boolean) => void;
   bumpHistory: () => void;
   setRfInstance: (rf: ReactFlowInstance | null) => void;
+  setAddRfNodeFn: (fn: ((rfNode: any) => void) | null) => void;
   addNode: (kind: FlowNode['type']) => void;
 }
 
@@ -67,6 +69,7 @@ export const useStore = create<State>((set, get) => ({
   serverOnline: false,
   historyTick: 0,
   rfInstance: null,
+  addRfNodeFn: null,
 
   setWorkflows: workflows =>
     set(s => {
@@ -123,6 +126,7 @@ export const useStore = create<State>((set, get) => ({
   setServerOnline: serverOnline => set({ serverOnline }),
   bumpHistory: () => set(s => ({ historyTick: s.historyTick + 1 })),
   setRfInstance: rfInstance => set({ rfInstance }),
+  setAddRfNodeFn: addRfNodeFn => set({ addRfNodeFn }),
   addNode: kind => {
     const s = get();
     const cur = s.current;
@@ -139,7 +143,11 @@ export const useStore = create<State>((set, get) => ({
       position: { x: Math.round(pos.x), y: Math.round(pos.y) },
       config: defaultsFor(kind)
     };
-    s.patchCurrent({ nodes: [...cur.nodes, node] });
+    if (s.addRfNodeFn) {
+      s.addRfNodeFn({ id, type: 'fp', position: node.position, data: { node } });
+    } else {
+      s.patchCurrent({ nodes: [...cur.nodes, node] });
+    }
     s.selectNode(id);
   }
 }));

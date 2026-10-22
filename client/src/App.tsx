@@ -32,6 +32,7 @@ export default function App() {
   const rightTab = useStore(s => s.rightTab);
   const setRightTab = useStore(s => s.setRightTab);
   const running = useStore(s => s.running);
+  const online = useStore(s => s.serverOnline);
 
   // первичная загрузка
   useEffect(() => {
@@ -92,6 +93,11 @@ export default function App() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-ink-950 text-slate-200">
       <TopBar />
+      {!online && (
+        <div className="pointer-events-none fixed left-1/2 top-14 z-[70] -translate-x-1/2 rounded-xl border border-rose-500/50 bg-ink-900 px-4 py-2 text-sm text-rose-300 shadow-xl">
+          ⚠ Сервер не отвечает. Нажми F5 — если не помогло, включи автопилот и я починю сам
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <div className="relative min-w-0 flex-1">
