@@ -1,0 +1,57 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { Workflow } from '../core/types';
+
+const dir = fileURLToPath(new URL('./data', import.meta.url));
+const wfFile = path.join(dir, 'workflows.json');
+const setFile = path.join(dir, 'settings.json');
+const histFile = path.join(dir, 'history.json');
+
+function readJson(file: string, fallback: any) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(file: string, data: any) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('write error', file, e);
+  }
+}
+
+export interface Settings {
+  aiKey: string;
+  aiBaseUrl: string;
+  aiModel: string;
+}
+
+export const store = {
+  loadWorkflows(): Record<string, Workflow> {
+    return readJson(wfFile, {});
+  },
+  saveWorkflows(w: Record<string, Workflow>) {
+    writeJson(wfFile, w);
+  },
+  loadSettings(): Settings {
+    return { aiKey: '', aiBaseUrl: 'https://api.openai.com/v1', aiModel: 'gpt-4o-mini', ...readJson(setFile, {}) };
+  },
+  saveSettings(s: Settings) {
+    writeJson(setFile, s);
+  },
+  loadHistory(): Record<string, any[]> {
+    return readJson(histFile, {});
+  },
+  pushHistory(wfId: string, entry: any) {
+    const all = readJson(histFile, {});
+    const list = all[wfId] || [];
+    list.push(entry);
+    all[wfId] = list.slice(-50);
+    writeJson(histFile, all);
+  }
+};
