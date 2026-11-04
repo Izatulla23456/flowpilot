@@ -5,7 +5,7 @@ services:
     name: flowpilot
     env: node
     plan: free
-    nodeVersion: "22"
+    # версия Node берётся из "engines" в package.json (Node 22)
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
