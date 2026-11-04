@@ -1,0 +1,17 @@
+# Render Blueprint — деплой в один клик:
+# Render → New → Blueprint → выбрать этот репозиторий → Deploy
+services:
+  - type: web
+    name: flowpilot
+    env: node
+    plan: free
+    nodeVersion: "22"
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: FLOWPILOT_ADMIN_TOKEN
+        sync: false

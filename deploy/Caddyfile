@@ -1,11 +1,8 @@
-# Caddy: автоматический HTTPS (Let's Encrypt) для домена.
-# 1) Укажи свой домен вместо flowpilot.example.kz
-# 2) DNS A-запись домена → IP твоего VPS
-# 3) caddy run --config /etc/caddy/Caddyfile
-flowpilot.example.kz {
-    reverse_proxy 127.0.0.1:8787
-    encode gzip
+# Caddy: автоматический HTTPS (Let's Encrypt) для FlowPilot.
+# Домен берётся из переменной окружения DOMAIN (ставится в /etc/default/caddy):
+#   DOMAIN=example.kz  →  site: https://example.kz
+# DNS A-запись домена должна указывать на IP этого сервера ДО старта caddy.
+https://{env.DOMAIN} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787
 }
-
-# Локальная проверка без домена (разделённый файл):
-# caddy reverse-proxy --from localhost --to 127.0.0.1:8787
