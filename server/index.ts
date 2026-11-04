@@ -329,12 +329,12 @@ app.get('/api/settings', requireAuth, (_req, res) => {
   // ВАЖНО: ключи/токены никогда не возвращаются клиенту (публикация = утечка)
   res.json({ aiBaseUrl: s.aiBaseUrl, aiModel: s.aiModel, hasKey: Boolean(s.aiKey), hasTelegram: Boolean(s.telegramBotToken && s.telegramChatId) });
 });
-
 app.put('/api/settings', requireAuth, (req, res) => {
-  const cur = store.loadSettings();
+  // Слияние идёт с файлом (без env), чтобы env-секреты не «засвечивались» в settings.json
+  const cur = store.rawSettings();
   const next = { ...cur, ...pick(req.body, ['aiKey', 'aiBaseUrl', 'aiModel', 'telegramBotToken', 'telegramChatId']) };
   store.saveSettings(next);
-  res.json({ ok: true, hasKey: Boolean(next.aiKey), hasTelegram: Boolean(next.telegramBotToken && next.telegramChatId) });
+  res.json({ ok: true, hasKey: Boolean(process.env.AI_KEY || next.aiKey), hasTelegram: Boolean((process.env.TELEGRAM_BOT_TOKEN || next.telegramBotToken) && (process.env.TELEGRAM_CHAT_ID || next.telegramChatId)) });
 });
 
 app.get('/api/workflows/:id/history', requireAuth, (req, res) => res.json(store.loadHistory()[String(req.params.id)] || []));

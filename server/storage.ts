@@ -36,6 +36,10 @@ export interface Settings {
   telegramChatId: string;
 }
 
+function readSettingsFile(): Settings {
+  return { aiKey: '', aiBaseUrl: 'https://api.openai.com/v1', aiModel: 'gpt-4o-mini', telegramBotToken: '', telegramChatId: '', ...readJson(setFile, {}) };
+}
+
 export const store = {
   loadWorkflows(): Record<string, Workflow> {
     return readJson(wfFile, {});
@@ -43,8 +47,21 @@ export const store = {
   saveWorkflows(w: Record<string, Workflow>) {
     writeJson(wfFile, w);
   },
+  rawSettings(): Settings {
+    // Только файл (без env) — для сохранения, чтобы env-значения не «засвечивались» в файле
+    return readSettingsFile();
+  },
   loadSettings(): Settings {
-    return { aiKey: '', aiBaseUrl: 'https://api.openai.com/v1', aiModel: 'gpt-4o-mini', telegramBotToken: '', telegramChatId: '', ...readJson(setFile, {}) };
+    // Переменные окружения (Render/VPS/.env) имеют приоритет — они переживают перезапуски
+    const e = process.env;
+    const file = readSettingsFile();
+    return {
+      aiKey: e.AI_KEY || file.aiKey,
+      aiBaseUrl: e.AI_BASE_URL || file.aiBaseUrl,
+      aiModel: e.AI_MODEL || file.aiModel,
+      telegramBotToken: e.TELEGRAM_BOT_TOKEN || file.telegramBotToken,
+      telegramChatId: e.TELEGRAM_CHAT_ID || file.telegramChatId
+    };
   },
   saveSettings(s: Settings) {
     writeJson(setFile, s);
