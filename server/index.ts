@@ -173,8 +173,41 @@ app.post('/api/workflows/:id/run', async (req, res) => {
   res.json({ ok: result.status === 'success', error: result.error, output: result.output });
 });
 
-app.post('/api/webhook/:id', async (req, res) => {
-  const wf = workflows[req.params.id];
+// ---------- защита от SSRF и brute-force ----------
+
+/** Блокирует запросы к внутренним адресам (metadata, loopback, LAN) */
+function isInternalUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    if (h === 'localhost' || h === '0.0.0.0' || h === '::1' || h === '[::1]') return true;
+    if (h.endsWith('.local') || h.endsWith('.internal')) return true;
+    if (h.startsWith('10.') || h.startsWith('192.168.')) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+    if (h.startsWith('169.254.') || h.startsWith('127.')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Простой rate limit по IP (окно 60 с) */
+const rlHits = new Map<string, { n: number; t: number }>();
+function rateLimit(limit: number): express.RequestHandler {
+  return (req, res, next) => {
+    const ip = String(req.ip || 'unknown');
+    const now = Date.now();
+    const h = rlHits.get(ip);
+    if (!h || now - h.t > 60_000) rlHits.set(ip, { n: 1, t: now });
+    else if (++h.n > limit) return res.status(429).json({ error: 'too many requests' });
+    next();
+  };
+}
+const webhookLimiter = rateLimit(30);
+const aiLimiter = rateLimit(10);
+
+app.post('/api/webhook/:id', webhookLimiter, async (req, res) => {
+  const wf = workflows[String(req.params.id)];
   if (!wf) return res.status(404).json({ error: 'workflow not found' });
   const wh = wf.nodes.find(n => n.type === 'webhook');
   if (!wh) return res.status(400).json({ error: 'В этом воркфлоу нет webhook-ноды' });
@@ -186,10 +219,14 @@ app.post('/api/webhook/:id', async (req, res) => {
   res.json({ ok: result.status === 'success', output: result.output, error: result.error });
 });
 
-app.post('/api/exec/http', async (req, res) => {
+app.post('/api/exec/http', aiLimiter, async (req, res) => {
   const { method, url, headers, body } = req.body || {};
   if (!url) return res.status(400).json({ error: 'url required' });
-  const target = String(url).startsWith('/') ? `http://127.0.0.1:${PORT}${url}` : String(url);
+  const raw = String(url);
+  const target = raw.startsWith('/') ? `http://127.0.0.1:${PORT}${raw}` : raw;
+  if (!raw.startsWith('/') && isInternalUrl(target)) {
+    return res.status(403).json({ error: 'запросы к внутренним адресам запрещены' });
+  }
   try {
     const r = await fetch(target, {
       method: String(method || 'GET').toUpperCase(),
@@ -213,7 +250,7 @@ app.get('/api/templates', (_req, res) =>
   res.json(TEMPLATES.map(t => ({ name: t.name, description: t.description })))
 );
 
-app.post('/api/ai/generate', async (req, res) => {
+app.post('/api/ai/generate', aiLimiter, async (req, res) => {
   const prompt = String(req.body?.prompt || '').trim();
   if (!prompt) return res.status(400).json({ error: 'empty prompt' });
   try {
@@ -230,7 +267,7 @@ app.post('/api/ai/generate', async (req, res) => {
   }
 });
 
-app.post('/api/ai/explain', async (req, res) => {
+app.post('/api/ai/explain', aiLimiter, async (req, res) => {
   const wf = workflows[req.body?.workflowId] || (req.body?.workflow as Workflow);
   if (!wf || !Array.isArray(wf.nodes)) return res.status(400).json({ error: 'workflow required' });
   res.json(await aiExplain(wf));
@@ -238,7 +275,8 @@ app.post('/api/ai/explain', async (req, res) => {
 
 app.get('/api/settings', (_req, res) => {
   const s = store.loadSettings();
-  res.json({ aiKey: s.aiKey, aiBaseUrl: s.aiBaseUrl, aiModel: s.aiModel, hasKey: Boolean(s.aiKey) });
+  // ВАЖНО: сам ключ никогда не возвращается клиенту (публикация = утечка)
+  res.json({ aiBaseUrl: s.aiBaseUrl, aiModel: s.aiModel, hasKey: Boolean(s.aiKey) });
 });
 
 app.put('/api/settings', (req, res) => {

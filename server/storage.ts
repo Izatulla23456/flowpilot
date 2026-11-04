@@ -19,7 +19,10 @@ function readJson(file: string, fallback: any) {
 function writeJson(file: string, data: any) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    // атомарная запись: tmp-файл + rename (файл не останется наполовину записанным)
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, file);
   } catch (e) {
     console.error('write error', file, e);
   }
