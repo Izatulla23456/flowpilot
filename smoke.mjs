@@ -1,6 +1,15 @@
-const base = 'http://127.0.0.1:8787';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const ws = await (await fetch(base + '/api/workflows')).json();
+const base = 'http://127.0.0.1:8787';
+let ADMIN_TOKEN = '';
+try {
+  const m = fs.readFileSync(new URL('./.env', import.meta.url), 'utf8').match(/FLOWPILOT_ADMIN_TOKEN=(.+)/);
+  if (m) ADMIN_TOKEN = m[1].trim();
+} catch {}
+const H = { 'content-type': 'application/json', ...(ADMIN_TOKEN ? { Authorization: `Bearer ${ADMIN_TOKEN}` } : {}) };
+
+const ws = await (await fetch(base + '/api/workflows', { headers: H })).json();
 const wh = ws.find(w => /демо|Invoice/i.test(w.name) && w.nodes.some(n => n.type === 'webhook'));
 if (!wh) { console.error('demo workflow not found, have:', ws.map(w => w.name).join(' | ')); process.exit(1); }
 console.log('WF:', wh.id, wh.name);

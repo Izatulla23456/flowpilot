@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { NODE_META } from '../nodes/registry';
 import { useStore } from '../store';
+import { AiFixModal } from './Modals';
 import { Empty } from './ui';
 
 const pretty = (v: any) => {
@@ -18,6 +20,7 @@ export function DataPanel() {
   const explainAi = useStore(s => s.explainAi);
   const setExplain = useStore(s => s.setExplain);
   const lastExec = useStore(s => s.lastExec);
+  const [fixNode, setFixNode] = useState<string | null>(null);
 
   if (explainText) {
     return (
@@ -72,7 +75,17 @@ export function DataPanel() {
                   {r.status === 'success' ? 'OK' : 'ERR'} · {r.durationMs} мс
                 </span>
               </div>
-              {r.error && <pre className="mt-1 whitespace-pre-wrap text-[11px] text-rose-400">{r.error}</pre>}
+              {r.error && (
+                <>
+                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-rose-400">{r.error}</pre>
+                  <button
+                    className="mt-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[11px] font-medium text-violet-300 hover:bg-violet-500/20"
+                    onClick={() => setFixNode(r.nodeId)}
+                  >
+                    🩺 Починить с ИИ
+                  </button>
+                </>
+              )}
               <details className="mt-1">
                 <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-300">Вход</summary>
                 <pre className="mt-1 max-h-40 overflow-auto rounded bg-ink-950 p-2 text-[10px] text-slate-400">{pretty(r.input)}</pre>
@@ -85,6 +98,7 @@ export function DataPanel() {
           );
         })}
       </div>
+      <AiFixModal open={!!fixNode} nodeId={fixNode} onClose={() => setFixNode(null)} />
     </div>
   );
 }

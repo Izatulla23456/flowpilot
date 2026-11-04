@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import type { ReactFlowInstance } from '@xyflow/react';
 import { defaultsFor } from './nodes/registry';
-import type { ExecEvent, FlowNode, NodeRun, Workflow } from 'core/types';
+import type { ExecEvent, FlowEdge, FlowNode, NodeRun, Workflow } from 'core/types';
+
+export interface Snapshot {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  t: number;
+}
 
 export interface ExecSummary {
   at: number;
@@ -33,6 +39,9 @@ interface State {
   historyTick: number;
   rfInstance: ReactFlowInstance | null;
   addRfNodeFn: ((rfNode: any) => void) | null;
+  addRfEdgeFn: ((rfEdge: any) => void) | null;
+  undoStack: Snapshot[];
+  redoStack: Snapshot[];
 
   setWorkflows: (w: Workflow[]) => void;
   setCurrent: (w: Workflow | null) => void;
@@ -48,7 +57,12 @@ interface State {
   bumpHistory: () => void;
   setRfInstance: (rf: ReactFlowInstance | null) => void;
   setAddRfNodeFn: (fn: ((rfNode: any) => void) | null) => void;
+  setAddRfEdgeFn: (fn: ((rfEdge: any) => void) | null) => void;
+  snapshot: () => void;
+  undo: () => void;
+  redo: () => void;
   addNode: (kind: FlowNode['type']) => void;
+  addNodeConnected: (kind: FlowNode['type'], fromNodeId: string) => void;
 }
 
 let toastSeq = 0;
@@ -70,6 +84,9 @@ export const useStore = create<State>((set, get) => ({
   historyTick: 0,
   rfInstance: null,
   addRfNodeFn: null,
+  addRfEdgeFn: null,
+  undoStack: [],
+  redoStack: [],
 
   setWorkflows: workflows =>
     set(s => {
@@ -127,10 +144,50 @@ export const useStore = create<State>((set, get) => ({
   bumpHistory: () => set(s => ({ historyTick: s.historyTick + 1 })),
   setRfInstance: rfInstance => set({ rfInstance }),
   setAddRfNodeFn: addRfNodeFn => set({ addRfNodeFn }),
+  setAddRfEdgeFn: addRfEdgeFn => set({ addRfEdgeFn }),
+  // Снимок состояния канвы перед изменением (undo/redo). Слияние правок в окне 800 мс.
+  snapshot: () => {
+    const s = get();
+    const cur = s.current;
+    if (!cur) return;
+    const snap: Snapshot = { nodes: cur.nodes, edges: cur.edges, t: Date.now() };
+    const last = s.undoStack[s.undoStack.length - 1];
+    const next = last && snap.t - last.t < 800 ? [...s.undoStack.slice(0, -1), snap] : [...s.undoStack, snap];
+    set({ undoStack: next.slice(-50), redoStack: [] });
+  },
+  undo: () => {
+    const s = get();
+    const cur = s.current;
+    const prev = s.undoStack[s.undoStack.length - 1];
+    if (!cur || !prev) return;
+    const curSnap: Snapshot = { nodes: cur.nodes, edges: cur.edges, t: Date.now() };
+    const restored = { ...cur, nodes: prev.nodes, edges: prev.edges, updatedAt: Date.now() };
+    set({
+      current: restored,
+      workflows: s.workflows.map(w => (w.id === cur.id ? restored : w)),
+      undoStack: s.undoStack.slice(0, -1),
+      redoStack: [...s.redoStack, curSnap].slice(-50)
+    });
+  },
+  redo: () => {
+    const s = get();
+    const cur = s.current;
+    const next = s.redoStack[s.redoStack.length - 1];
+    if (!cur || !next) return;
+    const curSnap: Snapshot = { nodes: cur.nodes, edges: cur.edges, t: Date.now() };
+    const restored = { ...cur, nodes: next.nodes, edges: next.edges, updatedAt: Date.now() };
+    set({
+      current: restored,
+      workflows: s.workflows.map(w => (w.id === cur.id ? restored : w)),
+      redoStack: s.redoStack.slice(0, -1),
+      undoStack: [...s.undoStack, curSnap].slice(-50)
+    });
+  },
   addNode: kind => {
     const s = get();
     const cur = s.current;
     if (!cur) return;
+    s.snapshot();
     const id = uid();
     let pos = { x: 160 + Math.random() * 240, y: 120 + Math.random() * 180 };
     if (s.rfInstance) {
@@ -147,6 +204,34 @@ export const useStore = create<State>((set, get) => ({
       s.addRfNodeFn({ id, type: 'fp', position: node.position, data: { node } });
     } else {
       s.patchCurrent({ nodes: [...cur.nodes, node] });
+    }
+    s.selectNode(id);
+  },
+  addNodeConnected: (kind, fromNodeId) => {
+    const s = get();
+    const cur = s.current;
+    if (!cur) return;
+    const from = cur.nodes.find(n => n.id === fromNodeId);
+    if (!from) return;
+    s.snapshot();
+    const id = uid();
+    const pos = { x: Math.round(from.position.x + 280), y: Math.round(from.position.y + 40 + Math.random() * 80) };
+    const node: FlowNode = { id, type: kind, position: pos, config: defaultsFor(kind) };
+    if (s.addRfNodeFn && s.addRfEdgeFn) {
+      s.addRfNodeFn({ id, type: 'fp', position: pos, data: { node } });
+      s.addRfEdgeFn({
+        id: uid(),
+        source: fromNodeId,
+        target: id,
+        sourceHandle: from.type === 'if' ? 'true' : undefined,
+        label: from.type === 'if' ? 'да' : undefined,
+        animated: true
+      });
+    } else {
+      s.patchCurrent({
+        nodes: [...cur.nodes, node],
+        edges: [...cur.edges, { id: uid(), source: fromNodeId, target: id, sourceHandle: from.type === 'if' ? 'true' : undefined }]
+      });
     }
     s.selectNode(id);
   }

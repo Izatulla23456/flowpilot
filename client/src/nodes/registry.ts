@@ -79,7 +79,9 @@ export const NODE_META: Record<NodeKind, NodeMeta> = {
         help: '{{field.path}} подставит значения из входных данных'
       },
       { key: 'headersJson', label: 'Headers (JSON)', type: 'json', placeholder: '{ "Content-Type": "application/json" }' },
-      { key: 'body', label: 'Body', type: 'textarea', placeholder: '{ "text": "Привет, {{body.name}}" }' }
+      { key: 'body', label: 'Body', type: 'textarea', placeholder: '{ "text": "Привет, {{body.name}}" }' },
+      { key: 'retries', label: 'Повторы при сбое (0–5)', type: 'number', defaultValue: 0, help: 'Повторять запрос при ошибке сети или HTTP 5xx' },
+      { key: 'retryDelayMs', label: 'Пауза между повторами, мс', type: 'number', defaultValue: 1000 }
     ]
   },
   if: {
@@ -163,10 +165,134 @@ export const NODE_META: Record<NodeKind, NodeMeta> = {
     color: '#64748b',
     description: 'Подождать N миллисекунд',
     fields: [{ key: 'ms', label: 'Миллисекунды', type: 'number', defaultValue: 1000 }]
+  },
+  loop: {
+    kind: 'loop',
+    label: 'Цикл (Loop)',
+    icon: '🔁',
+    color: '#f97316',
+    description: 'Прогнать следующие ноды по каждому элементу массива',
+    fields: [
+      {
+        key: 'source',
+        label: 'Массив (путь в данных)',
+        type: 'text',
+        placeholder: '{{body.orders}}',
+        help: 'Укажи поле-массив во входных данных. Для каждого элемента следующие ноды отработают отдельно'
+      },
+      {
+        key: 'keyName',
+        label: 'Имя переменной элемента',
+        type: 'text',
+        defaultValue: 'item',
+        help: 'Внутри цикла текущий элемент доступен как {{item}}, порядковый — {{index}}'
+      }
+    ]
+  },
+  telegram: {
+    kind: 'telegram',
+    label: 'Telegram',
+    icon: '📨',
+    color: '#0ea5e9',
+    description: 'Отправить сообщение в Telegram (бот-токен и чат — в настройках)',
+    fields: [
+      {
+        key: 'text',
+        label: 'Текст сообщения',
+        type: 'textarea',
+        placeholder: '🚀 Новый заказ: {{body.customer}} на {{body.sum}}',
+        help: '{{field.path}} подставит значения из входных данных'
+      },
+      {
+        key: 'chatId',
+        label: 'Chat ID (опционально)',
+        type: 'text',
+        placeholder: 'пусто = чат из настроек',
+        help: 'Переопределить чат, указанный в настройках приложения'
+      }
+    ]
+  },
+  form: {
+    kind: 'form',
+    label: 'Форма',
+    icon: '📝',
+    color: '#a855f7',
+    isTrigger: true,
+    description: 'Публичная HTML-форма: посетитель заполняет → данные приходят в воркфлоу',
+    fields: [
+      { key: 'title', label: 'Заголовок формы', type: 'text', defaultValue: 'Новая заявка' },
+      {
+        key: 'fields',
+        label: 'Поля формы (JSON)',
+        type: 'json',
+        placeholder: '[{"name":"Имя"},{"name":"Email","type":"email"},{"name":"Комментарий","type":"textarea"}]',
+        help: 'type: text | email | number | textarea; пустой список = одно поле «Сообщение»',
+        defaultValue: '[{"name":"Имя"},{"name":"Email","type":"email"},{"name":"Комментарий","type":"textarea"}]'
+      }
+    ]
   }
 };
 
-export const NODE_ORDER: NodeKind[] = ['manual', 'webhook', 'schedule', 'httpRequest', 'if', 'set', 'code', 'respond', 'delay'];
+export const NODE_ORDER: NodeKind[] = ['manual', 'webhook', 'schedule', 'form', 'httpRequest', 'if', 'loop', 'set', 'code', 'telegram', 'respond', 'delay'];
+
+/** Подсказка «что дальше» — какие ноды логично подключить после данной */
+export const NEXT_SUGGESTIONS: Record<NodeKind, Array<{ kind: NodeKind; why: string }>> = {
+  manual: [
+    { kind: 'set', why: 'подготовить данные' },
+    { kind: 'httpRequest', why: 'получить данные с API' },
+    { kind: 'telegram', why: 'сразу уведомить' }
+  ],
+  webhook: [
+    { kind: 'if', why: 'разделить по условию' },
+    { kind: 'set', why: 'переименовать / собрать поля' },
+    { kind: 'telegram', why: 'сразу уведомить' },
+    { kind: 'httpRequest', why: 'опросить внешний API' }
+  ],
+  schedule: [
+    { kind: 'httpRequest', why: 'собрать данные' },
+    { kind: 'telegram', why: 'отправить отчёт' },
+    { kind: 'set', why: 'собрать payload' }
+  ],
+  form: [
+    { kind: 'if', why: 'проверить заявку' },
+    { kind: 'telegram', why: 'сообщить о новой заявке' },
+    { kind: 'set', why: 'пересобрать поля' }
+  ],
+  httpRequest: [
+    { kind: 'loop', why: 'пройтись по списку из ответа' },
+    { kind: 'if', why: 'проверить статус или поле' },
+    { kind: 'code', why: 'обработать данные' }
+  ],
+  if: [
+    { kind: 'respond', why: 'ответить по ветке' },
+    { kind: 'telegram', why: 'уведомить по ветке' },
+    { kind: 'set', why: 'подготовить ответ' }
+  ],
+  loop: [
+    { kind: 'telegram', why: 'сообщение по каждому элементу' },
+    { kind: 'httpRequest', why: 'запрос на каждый элемент' },
+    { kind: 'code', why: 'набрать значение элемента' }
+  ],
+  set: [
+    { kind: 'if', why: 'проверить условия' },
+    { kind: 'httpRequest', why: 'отправить наружу' },
+    { kind: 'telegram', why: 'уведомить' }
+  ],
+  code: [
+    { kind: 'if', why: 'проверить результат' },
+    { kind: 'respond', why: 'вернуть результат' },
+    { kind: 'telegram', why: 'уведомить о результате' }
+  ],
+  telegram: [
+    { kind: 'respond', why: 'завершить с ответом' },
+    { kind: 'delay', why: 'пауза перед следующим' }
+  ],
+  respond: [],
+  delay: [
+    { kind: 'httpRequest', why: 'запрос после паузы' },
+    { kind: 'respond', why: 'ответить' }
+  ]
+};
 
 export function defaultsFor(kind: NodeKind): Record<string, any> {
   const c: Record<string, any> = {};

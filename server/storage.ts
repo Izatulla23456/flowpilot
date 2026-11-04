@@ -32,6 +32,8 @@ export interface Settings {
   aiKey: string;
   aiBaseUrl: string;
   aiModel: string;
+  telegramBotToken: string;
+  telegramChatId: string;
 }
 
 export const store = {
@@ -42,7 +44,7 @@ export const store = {
     writeJson(wfFile, w);
   },
   loadSettings(): Settings {
-    return { aiKey: '', aiBaseUrl: 'https://api.openai.com/v1', aiModel: 'gpt-4o-mini', ...readJson(setFile, {}) };
+    return { aiKey: '', aiBaseUrl: 'https://api.openai.com/v1', aiModel: 'gpt-4o-mini', telegramBotToken: '', telegramChatId: '', ...readJson(setFile, {}) };
   },
   saveSettings(s: Settings) {
     writeJson(setFile, s);

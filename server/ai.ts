@@ -1,7 +1,7 @@
 import type { Workflow } from '../core/types';
 import { store } from './storage';
 
-const KINDS = ['manual', 'webhook', 'schedule', 'httpRequest', 'if', 'set', 'code', 'respond', 'delay'];
+const KINDS = ['manual', 'webhook', 'schedule', 'form', 'httpRequest', 'if', 'set', 'code', 'respond', 'delay', 'loop', 'telegram'];
 
 const SYSTEM = `You are the AI builder inside FlowPilot, a visual workflow automation platform (like n8n/Zapier).
 The user describes an automation in plain language. You produce a workflow as STRICT JSON — no markdown, no comments.
@@ -21,12 +21,15 @@ Node types and their config:
 - "code": JavaScript. config: { "code": "return { x: data.x * 2 };" } where \`data\` is the input; return the output
 - "respond": sets the HTTP response of the webhook. config: { "body": "JSON string or template; empty string = pass input through" }
 - "delay": wait. config: { "ms": 1000 }
+- "loop": ForEach over an array field. config: { "source": "{{path.to.array}}", "keyName": "item" } — downstream nodes run once per element; inside the loop use {{item}}, {{index}}, {{total}}
+- "telegram": send a Telegram message (bot token and chat are configured app-wide). config: { "text": "message with {{templates}}" }
+- "form": public HTML form trigger (input = { source: \"form\", title, fields: {...} }). config: { "title": "...", "fields": "JSON string: [{\"name\":\"Имя\"},{\"name\":\"Email\",\"type\":\"email\"}]" }
 Template rules: {{a.b.c}} or {{a[0].b}} resolves from the current input.
 Rules:
-1. Include exactly ONE start node (manual, webhook or schedule).
+1. Include exactly ONE start node (manual, webhook, schedule or form).
 2. Layout: left to right, x step 260, y around 120.
 3. Use only the listed node types.
-4. For Telegram: httpRequest POST to https://api.telegram.org/bot<YOUR_BOT_TOKEN>/sendMessage with headersJson '{"Content-Type":"application/json"}' and JSON body with chat_id and text (use templates inside text).
+4. Prefer the "telegram" node for messaging (bot is configured app-wide); use httpRequest to Telegram only if the user explicitly asks for a custom bot token.
 5. Prefer webhook for "when something happens", schedule for "every X", manual for demos.
 6. Built-in demo endpoints: GET /api/mock/orders (list of orders), POST /api/mock/notify (fake message delivery).
 7. Respond with JSON only.`;
@@ -54,7 +57,7 @@ export function extractJson(s: string): any {
   return null;
 }
 
-async function chat(messages: Array<{ role: string; content: string }>): Promise<string | null> {
+export async function chat(messages: Array<{ role: string; content: string }>): Promise<string | null> {
   const s = store.loadSettings();
   if (!s.aiKey) return null;
   try {
@@ -92,7 +95,7 @@ function normalizeGraph(g: any): { nodes: any[]; edges: any[] } | null {
       position: n.position && typeof n.position.x === 'number' ? n.position : { x: 60 + i * 260, y: 160 },
       config: n.config && typeof n.config === 'object' ? n.config : {}
     }));
-  if (nodes.length === 0 || !nodes.some((n: any) => ['manual', 'webhook', 'schedule'].includes(n.type))) return null;
+  if (nodes.length === 0 || !nodes.some((n: any) => ['manual', 'webhook', 'schedule', 'form'].includes(n.type))) return null;
   const edges = (Array.isArray(g.edges) ? g.edges : [])
     .filter((e: any) => e && ids.has(e.source) && ids.has(e.target) && e.source !== e.target)
     .map((e: any) => ({
@@ -152,12 +155,15 @@ const KIND_RU: Record<string, string> = {
   manual: 'Ручной запуск',
   webhook: 'Webhook (POST)',
   schedule: 'Расписание',
+  form: 'Форма (публичная HTML-страница)',
   httpRequest: 'HTTP-запрос',
   if: 'Условие (IF)',
   set: 'Присвоить поля',
   code: 'JavaScript',
   respond: 'Ответ Webhook',
-  delay: 'Задержка'
+  delay: 'Задержка',
+  loop: 'Цикл по массиву',
+  telegram: 'Telegram-сообщение'
 };
 
 export function ruleExplain(wf: Workflow): string {
@@ -170,6 +176,9 @@ export function ruleExplain(wf: Workflow): string {
     if (n.type === 'code') detail = 'обработка данных в JS';
     if (n.type === 'set') detail = `поля: ${(c.fields || []).map((f: any) => f.key).join(', ') || '—'}`;
     if (n.type === 'delay') detail = `${c.ms || 0} мс`;
+    if (n.type === 'loop') detail = `по массиву ${c.source || '{{…}}'} (элемент — ${c.keyName || 'item'})`;
+    if (n.type === 'telegram') detail = `сообщение: ${String(c.text || '').slice(0, 60)}`;
+    if (n.type === 'form') detail = `форма «${c.title || 'Форма'}», полей: ${(Array.isArray(c.fields) ? c.fields.length : 1) || 1}`;
     if (n.type === 'webhook') detail = `POST /api/webhook/${wf.id}`;
     return `${i + 1}. ${KIND_RU[n.type] || n.type}${detail ? ` — ${detail}` : ''}`;
   });
@@ -198,4 +207,133 @@ export async function aiExplain(wf: Workflow): Promise<{ text: string; ai: 'llm'
   ]);
   if (raw) return { text: raw.trim(), ai: 'llm' };
   return { text: ruleExplain(wf), ai: 'rules' };
+}
+
+// ---------- ИИ-доктор: диагностика и починка ошибки ноды ----------
+
+function ruleFixAdvice(node: any, lastRun: any | null): string {
+  const err = String(lastRun?.error || '');
+  const c = node?.config || {};
+  if (node?.type === 'httpRequest') {
+    if (!c.url) return 'У HTTP-ноды не заполнен URL. Впиши адрес (например /api/mock/orders или https://…).';
+    if (/HTTP 5\d\d/.test(err)) return `Сервер-приёмник ответил 5xx (${err}). Проверь URL и метод; включи «Повторы при сбое» (1–3).`;
+    if (/fetch failed|fetch/i.test(err)) return `Хост недоступен (${err}). Проверь адрес, доступность сервиса и права на внешние запросы.`;
+    if (/невалидный JSON/.test(err)) return 'Поле Headers (JSON) — невалидный JSON. Исправь формат: { "Key": "value" }.';
+  }
+  if (node?.type === 'code') return `JS-ошибка: ${err || 'выполнение упало'}. Вспоминка: data — входные данные; обязателен return; проверь доступ к полям, которых может не быть.`;
+  if (node?.type === 'if') return `Проверь «Левую/Правую часть»: шаблон {{…}} должен указывать на существующее поле входных данных (посмотри Данные ноды перед IF).`;
+  if (node?.type === 'respond') return 'Ответ пуст или невалидный JSON. Заполни «Тело ответа» валидным JSON-шаблоном, например { "ok": {{status}} }.';
+  if (node?.type === 'loop') return `Массив не найден по пути ${c.source || '{{…}}'}: убедись, что во входных данных по этому пути именно массив (массив, а не объект).`;
+  if (node?.type === 'telegram') return 'Проверь текст (не должен быть пустым) и, если нужна реальная отправка, токен бота и chatId в настройках ⚙ (без них работает mock-режим).';
+  return err ? `Ошибка: ${err}. Открой Данные ноды, посмотри вход и поправь конфиг.` : 'Явных ошибок нет — запусти воркфлоу ещё раз и посмотри данные ноды.';
+}
+
+export async function aiFix(
+  node: { type: string; config: any },
+  lastRun: { input?: any; error?: string } | null
+): Promise<{ fixed: Record<string, any> | null; advice: string; ai: 'llm' | 'rules' }> {
+  const raw = await chat([
+    {
+      role: 'system',
+      content: `You are the FlowPilot error doctor. You get a workflow node (type + config), its last input and the error. Propose the minimal fix. Respond STRICT JSON, no markdown:
+{
+  "config": { ...FULL corrected config object for this node type, all fields... },
+  "advice": "1–3 sentences in Russian: what was wrong and what you changed"
+}
+Node config fields:
+- httpRequest: { method, url, headersJson (JSON string), body (string with {{templates}}), retries (0-5), retryDelayMs }
+- if: { left ({{template}}), operator, right }
+- set: { fields: [{key, value}] }
+- code: { code } (JS, input is data, must return output)
+- respond: { body }
+- loop: { source ({{path.to.array}}), keyName }
+- telegram: { text, chatId }
+If you cannot determine a concrete fix, return { "config": null, "advice": "..." }. JSON only.`
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({ nodeType: node.type, config: node.config, lastInput: lastRun?.input, error: lastRun?.error || 'unknown failure' }, null, 2)
+    }
+  ]);
+  if (raw) {
+    const g = extractJson(raw);
+    if (g && (g.config && typeof g.config === 'object' ? Object.keys(g.config).length > 0 : false)) {
+      return { fixed: g.config, advice: String(g.advice || 'Исправлено'), ai: 'llm' };
+    }
+    if (g && g.advice) return { fixed: null, advice: String(g.advice), ai: 'llm' };
+  }
+  return { fixed: null, advice: ruleFixAdvice(node, lastRun), ai: 'rules' };
+}
+
+// ---------- Генератор тестовых запросов ----------
+
+function collectTemplatePaths(wf: Workflow): string[] {
+  const paths = new Set<string>();
+  const re = /\{\{\s*([\w$.\[\]]+)\s*\}\}/g;
+  for (const n of wf.nodes) {
+    const walk = (v: any) => {
+      if (typeof v === 'string') {
+        let m: RegExpExecArray | null;
+        re.lastIndex = 0;
+        while ((m = re.exec(v))) paths.add(m[1]);
+      } else if (v && typeof v === 'object') {
+        for (const x of Object.values(v)) walk(x);
+      }
+    };
+    walk(n.config);
+  }
+  return Array.from(paths);
+}
+
+export function ruleTests(wf: Workflow): Array<{ name: string; method: string; url: string; body: string; expect: string }> {
+  const url = `/api/webhook/${wf.id}`;
+  const bodyPaths = collectTemplatePaths(wf).filter(p => p.startsWith('body.') && !p.includes('['));
+  const fields: Record<string, string> = {};
+  for (const p of bodyPaths.slice(0, 6)) {
+    const key = p.slice(5);
+    const n = Number(key);
+    fields[key] = Number.isFinite(n) && n > 0 && String(key).length <= 6 ? '1500' : 'тест';
+  }
+  const obj = Object.keys(fields).length ? fields : { text: 'тест' };
+  const ifNode = wf.nodes.find(n => n.type === 'if');
+  const branchHint = ifNode ? ` (IF: ${ifNode.config?.left} ${ifNode.config?.operator} ${ifNode.config?.right})` : '';
+  return [
+    { name: 'Happy path', method: 'POST', url, body: JSON.stringify(obj, null, 2), expect: `Успешный прогон по главной ветке${branchHint}` },
+    {
+      name: 'Boundary (пусто/минимум)',
+      method: 'POST',
+      url,
+      body: JSON.stringify(Object.fromEntries(Object.keys(obj).map(k => [k, '']))),
+      expect: 'Второй ветки/ответ об обработке, без сбоев'
+    },
+    { name: 'Negative (битый JSON)', method: 'POST', url, body: '{"text": ', expect: 'HTTP 400, сервер жив, воркфлоу не сломан' }
+  ];
+}
+
+export async function aiTests(wf: Workflow): Promise<{ tests: Array<{ name: string; method: string; url: string; body: string; expect: string }>; ai: 'llm' | 'rules' }> {
+  const url = `/api/webhook/${wf.id}`;
+  const raw = await chat([
+    {
+      role: 'system',
+      content: `You are the FlowPilot QA engineer. Given a workflow (nodes+config), produce 3–5 test requests for its trigger. Respond STRICT JSON:
+[{ "name": "short name (happy/boundary/negative/edge)", "method": "POST", "url": "/api/webhook/WORKFLOW_ID_PLACEHOLDER", "body": "<JSON string body>", "expect": "expected result in Russian" }]
+Cover: happy path, boundary values, negative (empty/broken). JSON only.`
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({ name: wf.name, nodes: wf.nodes.map(n => ({ type: n.type, config: n.config })) }, null, 2)
+    }
+  ]);
+  if (raw) {
+    const g = extractJson(raw);
+    const arr = Array.isArray(g) ? g : Array.isArray(g?.tests) ? g.tests : null;
+    if (arr && arr.length) {
+      const tests = arr
+        .filter((t: any) => t && t.name && t.body !== undefined)
+        .slice(0, 5)
+        .map((t: any) => ({ name: String(t.name), method: 'POST', url: String(t.url || url).replace('WORKFLOW_ID_PLACEHOLDER', wf.id), body: String(t.body), expect: String(t.expect || '') }));
+      if (tests.length) return { tests, ai: 'llm' };
+    }
+  }
+  return { tests: ruleTests(wf), ai: 'rules' };
 }

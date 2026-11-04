@@ -23,6 +23,12 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 
 type FpNode = RfNode<{ node: FlowNode; lastRun?: NodeRun }, 'fp'>;
 
+function edgeLabel(sourceId: string, sourceHandle: string | undefined, nodes: FlowNode[]): string | undefined {
+  const src = nodes.find(n => n.id === sourceId);
+  if (src?.type !== 'if') return undefined;
+  return sourceHandle === 'true' ? 'да' : sourceHandle === 'false' ? 'нет' : undefined;
+}
+
 function cleanFromRf(nodes: FpNode[], edges: RfEdge[]) {
   return {
     nodes: nodes.map((n): FlowNode => ({
@@ -84,6 +90,7 @@ export function FlowCanvas() {
         source: e.source,
         target: e.target,
         sourceHandle: e.sourceHandle || undefined,
+        label: edgeLabel(e.source, e.sourceHandle || undefined, current.nodes),
         animated: true
       }));
       setRfNodes(nodes);
@@ -103,11 +110,16 @@ export function FlowCanvas() {
     setRfNodes(prev => prev.map(n => ({ ...n, data: { ...n.data, lastRun: runsMap[n.id] } })));
   }, [runsMap, setRfNodes]);
 
-  // Регистрируем функцию добавления ноды для сайдбара
+  // Регистрируем функции добавления ноды/рёбра для сайдбара и подсказок
   useEffect(() => {
-    useStore.getState().setAddRfNodeFn(rfNode => setRfNodes(prev => [...prev, rfNode]));
-    return () => useStore.getState().setAddRfNodeFn(null);
-  }, [setRfNodes]);
+    const st = useStore.getState();
+    st.setAddRfNodeFn(rfNode => setRfNodes(prev => [...prev, rfNode]));
+    st.setAddRfEdgeFn(rfEdge => setRfEdges(prev => [...prev, rfEdge]));
+    return () => {
+      useStore.getState().setAddRfNodeFn(null);
+      useStore.getState().setAddRfEdgeFn(null);
+    };
+  }, [setRfNodes, setRfEdges]);
 
   // Персист: RF-состояние → store (только если реально изменилось)
   useEffect(() => {
@@ -119,18 +131,29 @@ export function FlowCanvas() {
   }, [rfNodes, rfEdges, patchCurrent]);
 
   const onNodesChange = useCallback(
-    (changes: NodeChange<RfNode>[]) => onRfNodesChange(changes as NodeChange<FpNode>[]),
+    (changes: NodeChange<RfNode>[]) => {
+      if (changes.some(c => c.type === 'remove')) useStore.getState().snapshot();
+      onRfNodesChange(changes as NodeChange<FpNode>[]);
+    },
     [onRfNodesChange]
   );
-  const onEdgesChange = useCallback((changes: EdgeChange[]) => onRfEdgesChange(changes), [onRfEdgesChange]);
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      if (changes.some(c => c.type === 'remove')) useStore.getState().snapshot();
+      onRfEdgesChange(changes);
+    },
+    [onRfEdgesChange]
+  );
 
   const onConnect = useCallback(
     (c: Connection) => {
+      useStore.getState().snapshot();
       const edge: RfEdge = {
         id: uid(),
         source: c.source,
         target: c.target,
         sourceHandle: c.sourceHandle || undefined,
+        label: edgeLabel(c.source, c.sourceHandle || undefined, useStore.getState().current?.nodes || []),
         animated: true
       };
       setRfEdges(prev => [...prev, edge]);
@@ -153,7 +176,14 @@ export function FlowCanvas() {
       onInit={setRfInstance}
       fitView
       fitViewOptions={{ padding: 0.25 }}
-      defaultEdgeOptions={{ animated: true, style: { stroke: '#3b82f6' } }}
+      defaultEdgeOptions={{
+        animated: true,
+        style: { stroke: '#3b82f6' },
+        labelStyle: { fill: '#cbd5e1', fontSize: 10, fontWeight: 600 },
+        labelBgStyle: { fill: '#0f172a' },
+        labelBgPadding: [4, 2] as [number, number],
+        labelBgBorderRadius: 4
+      }}
     >
       <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#182338" />
       <Controls position="bottom-left" showInteractive={false} />

@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { api } from './api';
+import { useEffect, useState } from 'react';
+import { api, ApiAuthError, setToken } from './api';
 import { AiPanel } from './components/AiPanel';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DataPanel } from './components/DataPanel';
@@ -33,6 +33,27 @@ export default function App() {
   const setRightTab = useStore(s => s.setRightTab);
   const running = useStore(s => s.running);
   const online = useStore(s => s.serverOnline);
+  const [authFailed, setAuthFailed] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+
+  // undo / redo: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        useStore.getState().undo();
+      } else if ((k === 'z' && e.shiftKey) || k === 'y') {
+        e.preventDefault();
+        useStore.getState().redo();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
 
   // первичная загрузка
   useEffect(() => {
@@ -44,7 +65,9 @@ export default function App() {
         useStore.getState().setWorkflows(ws);
         if (ws.length) useStore.getState().setCurrent(ws[0]);
       })
-      .catch(() => {});
+      .catch((e: any) => {
+        if (alive && e instanceof ApiAuthError) setAuthFailed(true);
+      });
     return () => {
       alive = false;
     };
@@ -89,6 +112,33 @@ export default function App() {
     }, 700);
     return () => clearTimeout(t);
   }, [current]);
+
+  if (authFailed) {
+    return (
+      <div className="grid h-full place-items-center bg-ink-950 p-4">
+        <div className="w-full max-w-sm rounded-2xl border border-ink-600 bg-ink-900 p-6">
+          <div className="text-lg">🔐</div>
+          <h1 className="mt-2 text-base font-semibold text-slate-100">Нужен админ-токен</h1>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            На сервере включена защита (FLOWPILOT_ADMIN_TOKEN). Введите токен, чтобы открыть конструктор.
+          </p>
+          <form
+            className="mt-4 space-y-2"
+            onSubmit={e => {
+              e.preventDefault();
+              setToken(tokenInput.trim());
+              location.reload();
+            }}
+          >
+            <input className="inp" type="password" value={tokenInput} onChange={e => setTokenInput(e.target.value)} placeholder="токен" autoFocus />
+            <button className="btn-primary w-full" type="submit">
+              Войти
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-ink-950 text-slate-200">

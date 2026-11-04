@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import { AiPanel } from './AiPanel';
-import { SettingsModal, TemplatesModal } from './Modals';
+import { SettingsModal, TemplatesModal, TestsModal } from './Modals';
 
 export function TopBar() {
   const current = useStore(s => s.current);
@@ -15,6 +15,7 @@ export function TopBar() {
   const toast = useStore(s => s.toast);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTests, setShowTests] = useState(false);
 
   const run = async () => {
     if (!current || running) return;
@@ -96,12 +97,24 @@ export function TopBar() {
         <button
           title="Скопировать URL webhook"
           onClick={() => {
-            navigator.clipboard?.writeText(`http://localhost:8787/api/webhook/${current.id}`);
+            navigator.clipboard?.writeText(`${location.origin}/api/webhook/${current.id}`);
             toast('URL webhook скопирован');
           }}
           className="hidden items-center gap-1 rounded-md border border-ink-600 px-2 py-1 font-mono text-[10px] text-amber-300/90 hover:border-amber-500 lg:flex"
         >
           ⚡ /api/webhook/{current.id.slice(0, 6)}
+        </button>
+      )}
+      {current?.nodes.some(n => n.type === 'form') && (
+        <button
+          title="Скопировать URL публичной формы"
+          onClick={() => {
+            navigator.clipboard?.writeText(`${location.origin}/api/form/${current.id}`);
+            toast('URL формы скопирован — открой её в браузере');
+          }}
+          className="hidden items-center gap-1 rounded-md border border-ink-600 px-2 py-1 font-mono text-[10px] text-fuchsia-300/90 hover:border-fuchsia-500 lg:flex"
+        >
+          📝 /api/form/{current.id.slice(0, 6)}
         </button>
       )}
       <div className="ml-auto flex items-center gap-1.5">
@@ -117,6 +130,9 @@ export function TopBar() {
         </button>
         <button className="btn-ghost !text-sm" title="ИИ: описать текущий воркфлоу" onClick={explain}>
           📖
+        </button>
+        <button className="btn-ghost !text-sm" title="ИИ: сгенерировать тесты (happy/boundary/negative)" onClick={() => setShowTests(true)}>
+          🧪
         </button>
         <button className="btn-ghost !text-sm" title="Шаблоны" onClick={() => setShowTemplates(true)}>
           📦
@@ -134,6 +150,7 @@ export function TopBar() {
       <AiPanel />
       <TemplatesModal open={showTemplates} onClose={() => setShowTemplates(false)} />
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      <TestsModal open={showTests} onClose={() => setShowTests(false)} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import type { ExecEvent, ExecListener, FlowEdge, FlowNode, NodeRun, Workflow } from './types';
 
-const TEMPLATE_RE = /\{\{\s*([\w$]+(?:\.[\w$]+|\[\d+\])*)\s*\}\}/g;
+const TEMPLATE_RE = /\{\{\s*([\p{L}\p{N}_$]+(?:\.[\p{L}\p{N}_$]+|\[\d+\])*)\s*\}\}/gu;
 
 export function isTemplate(v: unknown): v is string {
   return typeof v === 'string' && v.includes('{{');
@@ -27,7 +27,7 @@ export function resolveTemplate(tpl: string, data: any): string {
 }
 
 function singleExpr(v: string): string | null {
-  const m = v.match(/^\s*\{\{\s*([\w$]+(?:\.[\w$]+|\[\d+\])*)\s*\}\}\s*$/);
+  const m = v.match(/^\s*\{\{\s*([\p{L}\p{N}_$]+(?:\.[\p{L}\p{N}_$]+|\[\d+\])*)\s*\}\}\s*$/u);
   return m ? m[1] : null;
 }
 
@@ -92,6 +92,7 @@ export interface ExecContext {
 
 export interface NodeResult {
   output: any;
+  outputs?: any[]; // fanout: цикл — несколько входов для следующего узла
   error?: string;
   nextHandle?: string;
 }
@@ -126,12 +127,22 @@ export async function execNode(node: FlowNode, input: any, ctx: ExecContext = {}
       if (c.body && method !== 'GET' && method !== 'HEAD') body = resolveTemplate(String(c.body), input);
       const fetchImpl = ctx.fetchImpl || ((u: string, i?: RequestInit) => fetch(u, i));
       const t0 = Date.now();
-      let res: Response;
-      try {
-        res = await fetchImpl(url, { method, headers, body });
-      } catch (e: any) {
-        return { output: undefined, error: `HTTP ошибка: ${e?.message || e}` };
+      const maxAttempts = Math.min(5, Math.max(0, Number(c.retries) || 0)) + 1;
+      const delayMs = Math.max(0, Math.min(30_000, Number(c.retryDelayMs) || 1000));
+      let res: Response | undefined;
+      let lastErr: any;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          res = await fetchImpl(url, { method, headers, body });
+          if (res.status < 500) break;
+          lastErr = new Error(`HTTP ${res.status}`);
+        } catch (e: any) {
+          lastErr = e;
+          res = undefined;
+        }
+        if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
       }
+      if (!res) return { output: undefined, error: `HTTP ошибка после ${maxAttempts} попыток: ${lastErr?.message || lastErr}` };
       const text = await res.text();
       const json = parseJsonLoose(text);
       return {
@@ -183,13 +194,51 @@ export async function execNode(node: FlowNode, input: any, ctx: ExecContext = {}
       return { output: input };
     }
 
+    case 'loop': {
+      // ForEach: source — путь к массиву во входных данных (например {{body.orders}})
+      const src = resolveValue(c.source, input);
+      const arr = Array.isArray(src) ? src : [];
+      const key = String(c.keyName || 'item').trim() || 'item';
+      if (arr.length === 0) {
+        const base = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : { data: input };
+        return { output: { ...base, [key]: undefined, index: -1, total: 0, loopEmpty: true } };
+      }
+      const base = input && typeof input === 'object' && !Array.isArray(input) ? input : { data: input };
+      const outputs = arr.map((el, i) => ({ ...base, [key]: el, index: i, total: arr.length, loopEmpty: false }));
+      return { output: outputs[0], outputs };
+    }
+
+    case 'telegram': {
+      // Telegram-сообщение: текст подставляется шаблоном; отправка через внутренний API сервера
+      const text = resolveTemplate(String(c.text || ''), input);
+      if (!text) return { output: undefined, error: 'Текст сообщения пуст' };
+      const fetchImpl = ctx.fetchImpl || ((u: string, i?: RequestInit) => fetch(u, i));
+      try {
+        const r = await fetchImpl('/api/integration/telegram', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        const j: any = await r.json();
+        if (!r.ok || !j?.ok) return { output: { ok: false, error: j?.error || `Telegram ${r.status}` }, error: j?.error || `Telegram ${r.status}` };
+        return { output: { ok: true, channel: 'telegram', messageId: j.messageId, at: new Date().toISOString() } };
+      } catch (e: any) {
+        return { output: undefined, error: `Telegram: ${e?.message || e}` };
+      }
+    }
+
+    case 'form': {
+      // Form-нода — триггер: вход = данные формы, отправленные со страницы /api/form/:id
+      return { output: input ?? {} };
+    }
+
     default:
       return { output: undefined, error: `Неизвестный тип ноды: ${node.type}` };
   }
 }
 
 export function findTriggers(wf: Workflow): FlowNode[] {
-  return wf.nodes.filter(n => n.type === 'manual' || n.type === 'webhook' || n.type === 'schedule');
+  return wf.nodes.filter(n => n.type === 'manual' || n.type === 'webhook' || n.type === 'schedule' || n.type === 'form');
 }
 
 export interface ExecuteOptions {
@@ -248,7 +297,7 @@ export async function executeWorkflow(wf: Workflow, opts: ExecuteOptions): Promi
             : { triggeredAt: new Date().toISOString() }
     }
   ];
-  const maxSteps = opts.maxSteps ?? 200;
+  const maxSteps = opts.maxSteps ?? 2000;
   let steps = 0;
   let output: any;
   let hadError = false;
@@ -267,15 +316,15 @@ export async function executeWorkflow(wf: Workflow, opts: ExecuteOptions): Promi
     }
     const node = nodes.get(step.id);
     if (!node) continue;
-    const isTrigger = node.type === 'manual' || node.type === 'webhook' || node.type === 'schedule';
+    const isTrigger = node.type === 'manual' || node.type === 'webhook' || node.type === 'schedule' || node.type === 'form';
     if (isTrigger && step.id !== entry.id) continue; // триггеры — только как вход
 
     const count = (perNode.get(step.id) || 0) + 1;
-    if (count > 20) {
+    if (count > 500) {
       hadError = true;
       const run: NodeRun = {
         nodeId: step.id, status: 'error', input: step.input, output: undefined,
-        error: 'Нода сработала >20 раз — похоже на цикл', durationMs: 0, runIndex: count
+        error: 'Нода сработала >500 раз — похоже на цикл', durationMs: 0, runIndex: count
       };
       runs.push(run);
       emit({ type: 'node', run });
@@ -315,7 +364,9 @@ export async function executeWorkflow(wf: Workflow, opts: ExecuteOptions): Promi
       if (!e.sourceHandle) return false;
       return e.sourceHandle === result.nextHandle;
     });
-    for (const e of outs) queue.push({ id: e.target, input: result.output });
+    // fanout (loop): каждый элемент массива — отдельный прогон вниз
+    const payloads = result.outputs && result.outputs.length > 0 ? result.outputs : [result.output];
+    for (const p of payloads) for (const e of outs) queue.push({ id: e.target, input: p });
   }
 
   emit({ type: 'end', status: hadError ? 'error' : 'success', output });

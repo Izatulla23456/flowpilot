@@ -1,4 +1,4 @@
-import { NODE_META, type FieldDef } from '../nodes/registry';
+import { NODE_META, NEXT_SUGGESTIONS, type FieldDef } from '../nodes/registry';
 import { useStore } from '../store';
 import { Empty } from './ui';
 
@@ -106,6 +106,7 @@ export function ConfigPanel() {
 
   const meta = NODE_META[node.type];
   const setField = (key: string, value: any) => {
+    useStore.getState().snapshot();
     patchCurrent({
       nodes: current.nodes.map(n => (n.id === node.id ? { ...n, config: { ...n.config, [key]: value } } : n))
     });
@@ -129,6 +130,41 @@ export function ConfigPanel() {
         {node.type === 'webhook' && (
           <div className="mt-2 break-all rounded-lg bg-ink-900 p-2 font-mono text-[11px] text-amber-300">
             POST /api/webhook/{current.id}
+          </div>
+        )}
+        {node.type === 'form' && (
+          <div className="mt-2 rounded-lg bg-ink-900 p-2 font-mono text-[11px] text-fuchsia-300">
+            GET /api/form/{current.id}
+            <button
+              className="mt-1 w-full rounded border border-fuchsia-500/40 bg-fuchsia-500/10 py-0.5 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20"
+              onClick={() => {
+                navigator.clipboard?.writeText(`${location.origin}/api/form/${current.id}`);
+                useStore.getState().toast('URL формы скопирован');
+              }}
+            >
+              ⧉ Копировать URL формы
+            </button>
+          </div>
+        )}
+        {NEXT_SUGGESTIONS[node.type].length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1.5 text-[11px] font-medium text-slate-500">🪄 Что подключить дальше?</div>
+            <div className="flex flex-wrap gap-1.5">
+              {NEXT_SUGGESTIONS[node.type].map(s => {
+                const m = NODE_META[s.kind];
+                return (
+                  <button
+                    key={s.kind}
+                    title={s.why}
+                    className="rounded-lg border border-ink-600 bg-ink-800 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:border-blue-500 hover:text-blue-300"
+                    onClick={() => useStore.getState().addNodeConnected(s.kind, node.id)}
+                  >
+                    {m.icon} {m.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[10px] text-slate-600">Клик — нода добавится и соединится автоматически</p>
           </div>
         )}
       </div>

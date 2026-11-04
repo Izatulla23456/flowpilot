@@ -7,7 +7,10 @@ export type NodeKind =
   | 'set'
   | 'code'
   | 'respond'
-  | 'delay';
+  | 'delay'
+  | 'loop'
+  | 'telegram'
+  | 'form';
 
 export interface XY {
   x: number;
